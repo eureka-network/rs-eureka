@@ -4,7 +4,11 @@ pub mod abi {
 pub mod pb {
     include!(concat!(env!("OUT_DIR"), "/eureka.ingest.v1.rs"));
 }
-use pb::{value::Typed, Field, RecordChange, RecordChanges, Value};
+mod parser;
+use pb::{
+    record_change::Operation, value::Typed, Field, OffchainData, OffchainDataContent, RecordChange,
+    RecordChanges, Value,
+};
 use substreams::scalar::BigInt;
 use substreams::{hex, Hex};
 use substreams_ethereum::pb::eth::v2 as eth;
@@ -21,7 +25,7 @@ pub fn map_posts(block: eth::Block) -> Result<RecordChanges, substreams::errors:
                 record: "lens_posts".to_string(),
                 id: get_post_id(&event.profile_id, &event.pub_id),
                 ordinal: log.ordinal(),
-                operation: pb::record_change::Operation::Create.into(),
+                operation: Operation::Create.into(),
                 fields: vec![
                     Field {
                         name: "profile_id".to_string(),
@@ -35,7 +39,12 @@ pub fn map_posts(block: eth::Block) -> Result<RecordChanges, substreams::errors:
                     Field {
                         name: "content_uri".to_string(),
                         new_value: Some(Value {
-                            typed: Some(Typed::String(event.content_uri)),
+                            typed: Some(Typed::Offchaindata(OffchainData {
+                                uri: event.content_uri,
+                                handler: "parse_offchain_data".to_string(),
+                                max_retries: 10,
+                                wait_before_retry: 60,
+                            })),
                         }),
                         old_value: None,
                     },
@@ -53,6 +62,30 @@ pub fn map_posts(block: eth::Block) -> Result<RecordChanges, substreams::errors:
     Ok(RecordChanges {
         record_changes: record_changes?,
     })
+}
+
+#[substreams::handlers::map]
+pub fn parse_offchain_data(
+    content: OffchainDataContent,
+) -> Result<RecordChanges, substreams::errors::Error> {
+    match parser::parse_content(&content) {
+        Ok(v) => Ok(v),
+        Err(_e) => Ok(RecordChanges {
+            record_changes: vec![RecordChange {
+                record: "lens_posts_offchain".to_string(),
+                id: content.id,
+                ordinal: 0,
+                operation: Operation::Create.into(),
+                fields: vec![Field {
+                    name: "state".to_string(),
+                    new_value: Some(Value {
+                        typed: Some(Typed::Uint32(parser::State::ParsingFailed as u32)),
+                    }),
+                    old_value: None,
+                }],
+            }],
+        }),
+    }
 }
 
 fn get_post_id(profile_id: &BigInt, pub_id: &BigInt) -> String {

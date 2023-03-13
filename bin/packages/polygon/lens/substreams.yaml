@@ -24,3 +24,10 @@ modules:
           - source: sf.ethereum.type.v2.Block
       output:
           type: proto:eureka.ingest.v1.RecordChanges
+
+    - name: parse_offchain_data
+      kind: map
+      inputs:
+          - source: eureka.ingest.v1.OffchainData
+      output:
+          type: proto:eureka.ingest.v1.RecordChanges
